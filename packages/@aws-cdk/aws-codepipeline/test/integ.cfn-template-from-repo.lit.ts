@@ -32,16 +32,19 @@ new cfn.PipelineCreateReplaceChangeSetAction(prodStage, 'PrepareChanges', {
   changeSetName,
   adminPermissions: true,
   templatePath: source.outputArtifact.atPath('template.yaml'),
+  runOrder: 1,
 });
 
 new codepipeline.ManualApprovalAction(stack, 'ApproveChanges', {
   stage: prodStage,
+  runOrder: 2,
 });
 
 new cfn.PipelineExecuteChangeSetAction(stack, 'ExecuteChanges', {
   stage: prodStage,
   stackName,
   changeSetName,
+  runOrder: 3,
 });
 /// !hide
 
