@@ -242,7 +242,6 @@ export interface GraphqlApiProps {
    *
    * @default - schema will be generated code-first (i.e. addType, addObjectType, etc.)
    *
-   * @experimental
    */
   readonly schema?: Schema;
   /**
@@ -493,10 +492,10 @@ export class GraphqlApi extends GraphqlApiBase {
   private validateAuthorizationProps(modes: AuthorizationMode[]) {
     modes.map((mode) => {
       if (mode.authorizationType === AuthorizationType.OIDC && !mode.openIdConnectConfig) {
-        throw new Error('Missing default OIDC Configuration');
+        throw new Error('Missing OIDC Configuration');
       }
       if (mode.authorizationType === AuthorizationType.USER_POOL && !mode.userPoolConfig) {
-        throw new Error('Missing default OIDC Configuration');
+        throw new Error('Missing User Pool Configuration');
       }
     });
     if (modes.filter((mode) => mode.authorizationType === AuthorizationType.API_KEY).length > 1) {
@@ -583,7 +582,6 @@ export class GraphqlApi extends GraphqlApiBase {
    * @param delimiter the delimiter between schema and addition
    * @default - ''
    *
-   * @experimental
    */
   public addToSchema(addition: string, delimiter?: string): void {
     this.schema.addToSchema(addition, delimiter);
@@ -594,7 +592,6 @@ export class GraphqlApi extends GraphqlApiBase {
    *
    * @param type the intermediate type to add to the schema
    *
-   * @experimental
    */
   public addType(type: IIntermediateType): IIntermediateType {
     return this.schema.addType(type);

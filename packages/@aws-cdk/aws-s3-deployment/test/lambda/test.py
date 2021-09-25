@@ -68,6 +68,122 @@ class TestHandler(unittest.TestCase):
             ["s3", "sync", "contents.zip", "s3://<dest-bucket-name>/"]
         )
 
+    def test_create_exclude(self):
+        invoke_handler("Create", {
+            "SourceBucketNames": ["<source-bucket>"],
+            "SourceObjectKeys": ["<source-object-key>"],
+            "DestinationBucketName": "<dest-bucket-name>",
+            "Exclude": ["sample.json"]
+        })
+
+        self.assertAwsCommands(
+            ["s3", "cp", "s3://<source-bucket>/<source-object-key>", "archive.zip"],
+            ["s3", "sync", "--delete", "--exclude", "sample.json", "contents.zip", "s3://<dest-bucket-name>/"]
+        )
+
+    def test_update_exclude(self):
+        invoke_handler("Update", {
+            "SourceBucketNames": ["<source-bucket>"],
+            "SourceObjectKeys": ["<source-object-key>"],
+            "DestinationBucketName": "<dest-bucket-name>",
+            "Exclude": ["sample.json"]
+        }, old_resource_props={
+            "DestinationBucketName": "<dest-bucket-name>",
+        }, physical_id="<physical-id>")
+
+        self.assertAwsCommands(
+            ["s3", "cp", "s3://<source-bucket>/<source-object-key>", "archive.zip"],
+            ["s3", "sync", "--delete", "--exclude", "sample.json", "contents.zip", "s3://<dest-bucket-name>/"]
+        )
+
+    def test_create_include(self):
+        invoke_handler("Create", {
+            "SourceBucketNames": ["<source-bucket>"],
+            "SourceObjectKeys": ["<source-object-key>"],
+            "DestinationBucketName": "<dest-bucket-name>",
+            "Include": ["/sample/*.json"]
+        })
+
+        self.assertAwsCommands(
+            ["s3", "cp", "s3://<source-bucket>/<source-object-key>", "archive.zip"],
+            ["s3", "sync", "--delete", "--include", "/sample/*.json", "contents.zip", "s3://<dest-bucket-name>/"]
+        )
+
+    def test_update_include(self):
+        invoke_handler("Update", {
+            "SourceBucketNames": ["<source-bucket>"],
+            "SourceObjectKeys": ["<source-object-key>"],
+            "DestinationBucketName": "<dest-bucket-name>",
+            "Include": ["/sample/*.json"]
+        }, old_resource_props={
+            "DestinationBucketName": "<dest-bucket-name>",
+        }, physical_id="<physical-id>")
+
+        self.assertAwsCommands(
+            ["s3", "cp", "s3://<source-bucket>/<source-object-key>", "archive.zip"],
+            ["s3", "sync", "--delete", "--include", "/sample/*.json", "contents.zip", "s3://<dest-bucket-name>/"]
+        )
+
+    def test_create_include_exclude(self):
+        invoke_handler("Create", {
+            "SourceBucketNames": ["<source-bucket>"],
+            "SourceObjectKeys": ["<source-object-key>"],
+            "DestinationBucketName": "<dest-bucket-name>",
+            "Exclude": ["/sample/*"],
+            "Include": ["/sample/*.json"]
+        })
+
+        self.assertAwsCommands(
+            ["s3", "cp", "s3://<source-bucket>/<source-object-key>", "archive.zip"],
+            ["s3", "sync", "--delete", "--exclude", "/sample/*", "--include", "/sample/*.json", "contents.zip", "s3://<dest-bucket-name>/"]
+        )
+
+    def test_update_include_exclude(self):
+        invoke_handler("Update", {
+            "SourceBucketNames": ["<source-bucket>"],
+            "SourceObjectKeys": ["<source-object-key>"],
+            "DestinationBucketName": "<dest-bucket-name>",
+            "Exclude": ["/sample/*"],
+            "Include": ["/sample/*.json"]
+        }, old_resource_props={
+            "DestinationBucketName": "<dest-bucket-name>",
+        }, physical_id="<physical-id>")
+
+        self.assertAwsCommands(
+            ["s3", "cp", "s3://<source-bucket>/<source-object-key>", "archive.zip"],
+            ["s3", "sync", "--delete", "--exclude", "/sample/*", "--include", "/sample/*.json", "contents.zip", "s3://<dest-bucket-name>/"]
+        )
+
+    def test_create_multiple_include_exclude(self):
+        invoke_handler("Create", {
+            "SourceBucketNames": ["<source-bucket>"],
+            "SourceObjectKeys": ["<source-object-key>"],
+            "DestinationBucketName": "<dest-bucket-name>",
+            "Exclude": ["/sample/*", "/another/*"],
+            "Include": ["/sample/*.json", "/another/*.json"]
+        })
+
+        self.assertAwsCommands(
+            ["s3", "cp", "s3://<source-bucket>/<source-object-key>", "archive.zip"],
+            ["s3", "sync", "--delete", "--exclude", "/sample/*", "--exclude", "/another/*", "--include", "/sample/*.json", "--include", "/another/*.json", "contents.zip", "s3://<dest-bucket-name>/"]
+        )
+
+    def test_update_multiple_include_exclude(self):
+        invoke_handler("Update", {
+            "SourceBucketNames": ["<source-bucket>"],
+            "SourceObjectKeys": ["<source-object-key>"],
+            "DestinationBucketName": "<dest-bucket-name>",
+            "Exclude": ["/sample/*", "/another/*"],
+            "Include": ["/sample/*.json", "/another/*.json"]
+        }, old_resource_props={
+            "DestinationBucketName": "<dest-bucket-name>",
+        }, physical_id="<physical-id>")
+
+        self.assertAwsCommands(
+            ["s3", "cp", "s3://<source-bucket>/<source-object-key>", "archive.zip"],
+            ["s3", "sync", "--delete", "--exclude", "/sample/*", "--exclude", "/another/*", "--include", "/sample/*.json", "--include", "/another/*.json", "contents.zip", "s3://<dest-bucket-name>/"]
+        )
+
     def test_create_update_multiple_sources(self):
         invoke_handler("Create", {
             "SourceBucketNames": ["<source-bucket1>", "<source-bucket2>"],
@@ -122,7 +238,7 @@ class TestHandler(unittest.TestCase):
 
         self.assertAwsCommands(
             ["s3", "cp", "s3://<source-bucket>/<source-object-key>", "archive.zip"],
-            ["s3", "sync", "--delete", "contents.zip", "s3://<dest-bucket-name>/<dest-key-prefix>", "--content-type", "text/html", "--content-language", "en", "--metadata", "{\"x-amz-meta-best\":\"game\"}", "--metadata-directive", "REPLACE"]
+            ["s3", "sync", "--delete", "contents.zip", "s3://<dest-bucket-name>/<dest-key-prefix>", "--content-type", "text/html", "--content-language", "en", "--metadata", "{\"best\":\"game\"}", "--metadata-directive", "REPLACE"]
         )
 
     def test_delete_no_retain(self):
@@ -425,7 +541,7 @@ def read_aws_out():
 #   resourceProps: map to pass to "ResourceProperties"
 #   expected_status: "SUCCESS" or "FAILED"
 def invoke_handler(requestType, resourceProps, old_resource_props=None, physical_id=None, expected_status='SUCCESS'):
-    response_url = '<response-url>'
+    response_url = 'http://<response-url>'
 
     event={
         'ResponseURL': response_url,
@@ -443,24 +559,32 @@ def invoke_handler(requestType, resourceProps, old_resource_props=None, physical
         event['PhysicalResourceId'] = physical_id
 
     class ContextMock: log_stream_name = 'log_stream'
-    class ResponseMock: reason = 'OK'
+    class ResponseMock:
+      reason = 'OK'
+      # needed because the context manager calls this
+      close = lambda _: _
 
     context = ContextMock()
-    requests.put = MagicMock(return_value=ResponseMock())
+    index.urlopen = MagicMock(return_value=ResponseMock())
 
     #--------------------
     # invoke the handler
     #--------------------
     index.handler(event, context)
 
-    requests.put.assert_called_once()
-    (pos_args, kw_args) = requests.put.call_args
+    index.urlopen.assert_called_once()
+    (pos_args, _) = index.urlopen.call_args
 
-    actual_url = pos_args[0]
-    actual_data = kw_args['data']
+    actual_request = pos_args[0]
+    actual_url = actual_request.full_url
+    actual_data = actual_request.data
+    actual_method = actual_request.method
 
     if actual_url != response_url:
         raise Exception("Invalid url used for sending CFN response. expected=%s actual=%s" % (response_url, actual_url))
+
+    if actual_method != 'PUT':
+        raise Exception("Invalid method used for sending CFN response. expected=PUT actual=%s" % (actual_method,))
 
     resp = json.loads(actual_data)
 

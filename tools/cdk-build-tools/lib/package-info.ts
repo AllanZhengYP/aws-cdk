@@ -25,10 +25,24 @@ export function cdkBuildOptions(): CDKBuildOptions {
 }
 
 /**
+ * Return the cdk-package options
+ */
+export function cdkPackageOptions(): CDKPackageOptions {
+  return currentPackageJson()['cdk-package'] || {};
+}
+
+/**
  * Whether this is a jsii package
  */
 export function isJsii(): boolean {
   return currentPackageJson().jsii !== undefined;
+}
+
+/**
+ * Whether this is a private package
+ */
+export function isPrivate(): boolean {
+  return currentPackageJson().private;
 }
 
 export interface File {
@@ -64,7 +78,7 @@ export async function listFiles(dirName: string, predicate: (x: File) => boolean
  * Return the unit test files for this package
  */
 export async function unitTestFiles(): Promise<File[]> {
-  return listFiles('test', f => f.filename.startsWith('test.') && f.filename.endsWith('.js'));
+  return listFiles('test', f => f.filename.endsWith('.test.js'));
 }
 
 export async function hasIntegTests(): Promise<boolean> {
@@ -81,9 +95,13 @@ export interface CompilerOverrides {
 /**
  * Return the compiler for this package (either tsc or jsii)
  */
-export function packageCompiler(compilers: CompilerOverrides): string[] {
+export function packageCompiler(compilers: CompilerOverrides, options?: CDKBuildOptions): string[] {
   if (isJsii()) {
-    return [compilers.jsii || require.resolve('jsii/bin/jsii'), '--silence-warnings=reserved-word'];
+    const args = ['--silence-warnings=reserved-word'];
+    if (options?.stripDeprecated) {
+      args.push('--strip-deprecated');
+    }
+    return [compilers.jsii || require.resolve('jsii/bin/jsii'), ...args];
   } else {
     return [compilers.tsc || require.resolve('typescript/bin/tsc'), '--build'];
   }
@@ -148,6 +166,24 @@ export interface CDKBuildOptions {
    * Environment variables to be passed to 'cdk-build' and all of its child processes.
    */
   env?: NodeJS.ProcessEnv;
+
+  /**
+   * Whether deprecated symbols should be stripped from the jsii assembly and typescript declaration files.
+   * @see https://aws.github.io/jsii/user-guides/lib-author/toolchain/jsii/#-strip-deprecated
+   */
+  stripDeprecated?: boolean;
+}
+
+export interface CDKPackageOptions {
+  /**
+   *  Should this package be shrinkwrap
+   */
+  shrinkWrap?: boolean;
+
+  /*
+   * An optional command (formatted as a list of strings) to run after packaging
+  */
+  post?: string[];
 }
 
 /**

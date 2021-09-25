@@ -1,13 +1,13 @@
-import '@aws-cdk/assert/jest';
+import { Template } from '@aws-cdk/assertions';
 import { App, SecretValue, Stack } from '@aws-cdk/core';
-import { ManagedPolicy, Policy, PolicyStatement, User } from '../lib';
+import { Group, ManagedPolicy, Policy, PolicyStatement, User } from '../lib';
 
 describe('IAM user', () => {
   test('default user', () => {
     const app = new App();
     const stack = new Stack(app, 'MyStack');
     new User(stack, 'MyUser');
-    expect(stack).toMatchTemplate({
+    Template.fromStack(stack).templateMatches({
       Resources: { MyUserDC45028B: { Type: 'AWS::IAM::User' } },
     });
   });
@@ -19,7 +19,7 @@ describe('IAM user', () => {
       password: SecretValue.plainText('1234'),
     });
 
-    expect(stack).toMatchTemplate({
+    Template.fromStack(stack).templateMatches({
       Resources:
       {
         MyUserDC45028B:
@@ -48,7 +48,7 @@ describe('IAM user', () => {
     });
 
     // THEN
-    expect(stack).toHaveResource('AWS::IAM::User', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::User', {
       ManagedPolicyArns: [
         { 'Fn::Join': ['', ['arn:', { Ref: 'AWS::Partition' }, ':iam::aws:policy/asdf']] },
       ],
@@ -65,7 +65,7 @@ describe('IAM user', () => {
       permissionsBoundary,
     });
 
-    expect(stack).toHaveResource('AWS::IAM::User', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::User', {
       PermissionsBoundary: {
         'Fn::Join': [
           '',
@@ -132,7 +132,7 @@ describe('IAM user', () => {
     }));
 
     // THEN
-    expect(stack).toHaveResource('AWS::IAM::Policy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
       Users: ['john'],
       PolicyDocument: {
         Statement: [
@@ -163,7 +163,7 @@ describe('IAM user', () => {
     }));
 
     // THEN
-    expect(stack).toHaveResource('AWS::IAM::Policy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
       Users: ['john'],
       PolicyDocument: {
         Statement: [
@@ -175,6 +175,37 @@ describe('IAM user', () => {
         ],
         Version: '2012-10-17',
       },
+    });
+  });
+
+  test('addToGroup for imported user', () => {
+    // GIVEN
+    const stack = new Stack();
+    const user = User.fromUserName(stack, 'ImportedUser', 'john');
+    const group = new Group(stack, 'Group');
+    const otherGroup = new Group(stack, 'OtherGroup');
+
+    // WHEN
+    user.addToGroup(group);
+    otherGroup.addUser(user);
+
+    // THEN
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::UserToGroupAddition', {
+      GroupName: {
+        Ref: 'GroupC77FDACD',
+      },
+      Users: [
+        'john',
+      ],
+    });
+
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::UserToGroupAddition', {
+      GroupName: {
+        Ref: 'OtherGroup85E5C653',
+      },
+      Users: [
+        'john',
+      ],
     });
   });
 });

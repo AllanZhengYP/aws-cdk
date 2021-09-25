@@ -375,6 +375,34 @@ test('adding and removing quotes from a numeric property causes no changes', () 
   expect(differences.resources.differenceCount).toBe(0);
 });
 
+test('versions are correctly detected as not numbers', () => {
+  const currentTemplate = {
+    Resources: {
+      ImageBuilderComponent: {
+        Type: 'AWS::ImageBuilder::Component',
+        Properties: {
+          Platform: 'Linux',
+          Version: '0.0.1',
+        },
+      },
+    },
+  };
+  const newTemplate = {
+    Resources: {
+      ImageBuilderComponent: {
+        Type: 'AWS::ImageBuilder::Component',
+        Properties: {
+          Platform: 'Linux',
+          Version: '0.0.2',
+        },
+      },
+    },
+  };
+
+  const differences = diffTemplate(currentTemplate, newTemplate);
+  expect(differences.resources.differenceCount).toBe(1);
+});
+
 test('single element arrays are equivalent to the single element in DependsOn expressions', () => {
   // GIVEN
   const currentTemplate = {
@@ -552,4 +580,95 @@ test('when a property changes including equivalent DependsOn', () => {
 
   differences = diffTemplate(newTemplate, currentTemplate);
   expect(differences.resources.differenceCount).toBe(1);
+});
+
+test('when a property with a number-like format changes', () => {
+  const bucketName = 'ShineyBucketName';
+  const tagChanges = {
+    '0.31.1-prod': '0.31.2-prod',
+    '8.0.5.5.4-identifier': '8.0.5.5.5-identifier',
+    '1.1.1.1': '1.1.2.2',
+    '1.2.3': '1.2.4',
+    '2.2.2.2': '2.2.3.2',
+    '3.3.3.3': '3.4.3.3',
+  };
+  const oldTags = Object.keys(tagChanges);
+  const newTags = Object.values(tagChanges);
+  const currentTemplate = {
+    Resources: {
+      QueueResource: {
+        Type: 'AWS::SQS::Queue',
+      },
+      BucketResource: {
+        Type: 'AWS::S3::Bucket',
+        Properties: {
+          BucketName: bucketName,
+          Tags: oldTags,
+        },
+      },
+    },
+  };
+  const newTemplate = {
+    Resources: {
+      QueueResource: {
+        Type: 'AWS::SQS::Queue',
+      },
+      BucketResource: {
+        Type: 'AWS::S3::Bucket',
+        Properties: {
+          BucketName: bucketName,
+          Tags: newTags,
+        },
+      },
+    },
+  };
+
+  const differences = diffTemplate(currentTemplate, newTemplate);
+  expect(differences.differenceCount).toBe(1);
+  expect(differences.resources.differenceCount).toBe(1);
+  const difference = differences.resources.changes.BucketResource;
+  expect(difference).not.toBeUndefined();
+  expect(difference?.oldResourceType).toEqual('AWS::S3::Bucket');
+  expect(difference?.propertyUpdates).toEqual({
+    Tags: { oldValue: oldTags, newValue: newTags, changeImpact: ResourceImpact.WILL_UPDATE, isDifferent: true },
+  });
+});
+
+test('when a property with a number-like format doesn\'t change', () => {
+  const bucketName = 'ShineyBucketName';
+  const tags = ['0.31.1-prod', '8.0.5.5.4-identifier', '1.1.1.1', '1.2.3'];
+  const currentTemplate = {
+    Resources: {
+      QueueResource: {
+        Type: 'AWS::SQS::Queue',
+      },
+      BucketResource: {
+        Type: 'AWS::S3::Bucket',
+        Properties: {
+          BucketName: bucketName,
+          Tags: tags,
+        },
+      },
+    },
+  };
+  const newTemplate = {
+    Resources: {
+      QueueResource: {
+        Type: 'AWS::SQS::Queue',
+      },
+      BucketResource: {
+        Type: 'AWS::S3::Bucket',
+        Properties: {
+          BucketName: bucketName,
+          Tags: tags,
+        },
+      },
+    },
+  };
+
+  const differences = diffTemplate(currentTemplate, newTemplate);
+  expect(differences.differenceCount).toBe(0);
+  expect(differences.resources.differenceCount).toBe(0);
+  const difference = differences.resources.changes.BucketResource;
+  expect(difference).toBeUndefined();
 });

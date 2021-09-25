@@ -5,7 +5,6 @@ import { cached } from '../../util/functions';
 import { AccountAccessKeyCache } from './account-cache';
 import { Account } from './sdk-provider';
 
-/** @experimental */
 export interface ISDK {
   /**
    * The region this SDK has been instantiated for
@@ -23,6 +22,7 @@ export interface ISDK {
    */
   currentAccount(): Promise<Account>;
 
+  lambda(): AWS.Lambda;
   cloudFormation(): AWS.CloudFormation;
   ec2(): AWS.EC2;
   ssm(): AWS.SSM;
@@ -30,6 +30,8 @@ export interface ISDK {
   route53(): AWS.Route53;
   ecr(): AWS.ECR;
   elbv2(): AWS.ELBv2;
+  secretsManager(): AWS.SecretsManager;
+  kms(): AWS.KMS;
 }
 
 /**
@@ -83,6 +85,10 @@ export class SDK implements ISDK {
     this.currentRegion = region;
   }
 
+  public lambda(): AWS.Lambda {
+    return this.wrapServiceErrorHandling(new AWS.Lambda(this.config));
+  }
+
   public cloudFormation(): AWS.CloudFormation {
     return this.wrapServiceErrorHandling(new AWS.CloudFormation({
       ...this.config,
@@ -112,6 +118,14 @@ export class SDK implements ISDK {
 
   public elbv2(): AWS.ELBv2 {
     return this.wrapServiceErrorHandling(new AWS.ELBv2(this.config));
+  }
+
+  public secretsManager(): AWS.SecretsManager {
+    return this.wrapServiceErrorHandling(new AWS.SecretsManager(this.config));
+  }
+
+  public kms(): AWS.KMS {
+    return this.wrapServiceErrorHandling(new AWS.KMS(this.config));
   }
 
   public async currentAccount(): Promise<Account> {
@@ -159,8 +173,9 @@ export class SDK implements ISDK {
         ...this.sdkOptions.assumeRoleCredentialsSourceDescription
           ? [`using ${this.sdkOptions.assumeRoleCredentialsSourceDescription}`]
           : [],
-        '(did you bootstrap the environment with the right \'--trust\'s?):',
         e.message,
+        '. Please make sure that this role exists in the account. If it doesn\'t exist, (re)-bootstrap the environment ' +
+        'with the right \'--trust\', using the latest version of the CDK CLI.',
       ].join(' '));
     }
   }
@@ -218,9 +233,9 @@ export class SDK implements ISDK {
           // do additional things to errors.
           return Object.assign(Object.create(response), {
             promise() {
-              return response.promise().catch((e: Error) => {
+              return response.promise().catch((e: Error & { code?: string }) => {
                 e = self.makeDetailedException(e);
-                debug(`Call failed: ${prop}(${JSON.stringify(args[0])}) => ${e.message}`);
+                debug(`Call failed: ${prop}(${JSON.stringify(args[0])}) => ${e.message} (code=${e.code})`);
                 return Promise.reject(e); // Re-'throw' the new error
               });
             },

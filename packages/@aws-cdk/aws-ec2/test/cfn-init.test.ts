@@ -1,8 +1,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { arrayWith, ResourcePart, stringLike } from '@aws-cdk/assert';
-import '@aws-cdk/assert/jest';
+import { arrayWith, ResourcePart, stringLike } from '@aws-cdk/assert-internal';
+import '@aws-cdk/assert-internal/jest';
 import * as iam from '@aws-cdk/aws-iam';
 import * as s3 from '@aws-cdk/aws-s3';
 import { Asset } from '@aws-cdk/aws-s3-assets';
@@ -148,6 +148,34 @@ describe('userdata', () => {
     expectLine(lines, cmdArg('cfn-signal', `--region ${Aws.REGION}`));
     expectLine(lines, cmdArg('cfn-signal', `--stack ${Aws.STACK_NAME}`));
     expectLine(lines, cmdArg('cfn-signal', `--resource ${resource.logicalId}`));
+    expectLine(lines, cmdArg('cfn-signal', '-e $?'));
+    expectLine(lines, cmdArg('cat', 'cfn-init.log'));
+    expectLine(lines, /fingerprint/);
+  });
+
+  test('linux userdata contains right commands when url and role included', () => {
+    // WHEN
+    simpleInit.attach(resource, {
+      platform: ec2.OperatingSystemType.LINUX,
+      instanceRole,
+      includeUrl: true,
+      includeRole: true,
+      userData: linuxUserData,
+    });
+
+    // THEN
+    const lines = linuxUserData.render().split('\n');
+    expectLine(lines, cmdArg('cfn-init', `--region ${Aws.REGION}`));
+    expectLine(lines, cmdArg('cfn-init', `--stack ${Aws.STACK_NAME}`));
+    expectLine(lines, cmdArg('cfn-init', `--resource ${resource.logicalId}`));
+    expectLine(lines, cmdArg('cfn-init', `--role ${instanceRole.roleName}`));
+    expectLine(lines, cmdArg('cfn-init', `--url https://cloudformation.${Aws.REGION}.${Aws.URL_SUFFIX}`));
+    expectLine(lines, cmdArg('cfn-init', '-c default'));
+    expectLine(lines, cmdArg('cfn-signal', `--region ${Aws.REGION}`));
+    expectLine(lines, cmdArg('cfn-signal', `--stack ${Aws.STACK_NAME}`));
+    expectLine(lines, cmdArg('cfn-signal', `--resource ${resource.logicalId}`));
+    expectLine(lines, cmdArg('cfn-init', `--role ${instanceRole.roleName}`));
+    expectLine(lines, cmdArg('cfn-init', `--url https://cloudformation.${Aws.REGION}.${Aws.URL_SUFFIX}`));
     expectLine(lines, cmdArg('cfn-signal', '-e $?'));
     expectLine(lines, cmdArg('cat', 'cfn-init.log'));
     expectLine(lines, /fingerprint/);

@@ -1,5 +1,6 @@
 import { Lazy, Stack, Token } from '@aws-cdk/core';
 import { Construct } from 'constructs';
+import { IAlarmAction } from './alarm-action';
 import { AlarmBase, IAlarm } from './alarm-base';
 import { CfnAlarm, CfnAlarmProps } from './cloudwatch.generated';
 import { HorizontalAnnotation } from './graph';
@@ -224,21 +225,73 @@ export class Alarm extends AlarmBase {
     return this.annotation;
   }
 
+  /**
+   * Trigger this action if the alarm fires
+   *
+   * Typically the ARN of an SNS topic or ARN of an AutoScaling policy.
+   */
+  public addAlarmAction(...actions: IAlarmAction[]) {
+    if (this.alarmActionArns === undefined) {
+      this.alarmActionArns = [];
+    }
+
+    this.alarmActionArns.push(...actions.map(a =>
+      this.validateActionArn(a.bind(this, this).alarmActionArn),
+    ));
+  }
+
+  private validateActionArn(actionArn: string): string {
+    const ec2ActionsRegexp: RegExp = /arn:aws:automate:[a-z|\d|-]+:ec2:[a-z]+/;
+    if (ec2ActionsRegexp.test(actionArn)) {
+      // Check per-instance metric
+      const metricConfig = this.metric.toMetricConfig();
+      if (metricConfig.metricStat?.dimensions?.length != 1 || metricConfig.metricStat?.dimensions![0].name != 'InstanceId') {
+        throw new Error(`EC2 alarm actions requires an EC2 Per-Instance Metric. (${JSON.stringify(metricConfig)} does not have an 'InstanceId' dimension)`);
+      }
+    }
+    return actionArn;
+  }
+
   private renderMetric(metric: IMetric) {
     const self = this;
     return dispatchMetric(metric, {
-      withStat(st) {
-        self.validateMetricStat(st, metric);
+      withStat(stat, conf) {
+        self.validateMetricStat(stat, metric);
+        const canRenderAsLegacyMetric = conf.renderingProperties?.label == undefined &&
+          (stat.account == undefined || Stack.of(self).account == stat.account);
+        // Do this to disturb existing templates as little as possible
+        if (canRenderAsLegacyMetric) {
+          return dropUndefined({
+            dimensions: stat.dimensions,
+            namespace: stat.namespace,
+            metricName: stat.metricName,
+            period: stat.period?.toSeconds(),
+            statistic: renderIfSimpleStatistic(stat.statistic),
+            extendedStatistic: renderIfExtendedStatistic(stat.statistic),
+            unit: stat.unitFilter,
+          });
+        }
 
-        return dropUndefined({
-          dimensions: st.dimensions,
-          namespace: st.namespace,
-          metricName: st.metricName,
-          period: st.period?.toSeconds(),
-          statistic: renderIfSimpleStatistic(st.statistic),
-          extendedStatistic: renderIfExtendedStatistic(st.statistic),
-          unit: st.unitFilter,
-        });
+        return {
+          metrics: [
+            {
+              metricStat: {
+                metric: {
+                  metricName: stat.metricName,
+                  namespace: stat.namespace,
+                  dimensions: stat.dimensions,
+                },
+                period: stat.period.toSeconds(),
+                stat: stat.statistic,
+                unit: stat.unitFilter,
+              },
+              id: 'm1',
+              accountId: stat.account,
+              label: conf.renderingProperties?.label,
+              returnData: true,
+            } as CfnAlarm.MetricDataQueryProperty,
+          ],
+        };
       },
 
       withExpression() {
@@ -268,8 +321,9 @@ export class Alarm extends AlarmBase {
                   unit: stat.unitFilter,
                 },
                 id: entry.id || uniqueMetricId(),
+                accountId: stat.account,
                 label: conf.renderingProperties?.label,
-                returnData: entry.tag ? undefined : false, // Tag stores "primary" attribute, default is "true"
+                returnData: entry.tag ? undefined : false, // entry.tag evaluates to true if the metric is the math expression the alarm is based on.
               };
             },
             withExpression(expr, conf) {
@@ -285,7 +339,7 @@ export class Alarm extends AlarmBase {
                 id: entry.id || uniqueMetricId(),
                 label: conf.renderingProperties?.label,
                 period: hasSubmetrics ? undefined : expr.period,
-                returnData: entry.tag ? undefined : false, // Tag stores "primary" attribute, default is "true"
+                returnData: entry.tag ? undefined : false, // entry.tag evaluates to true if the metric is the math expression the alarm is based on.
               };
             },
           }) as CfnAlarm.MetricDataQueryProperty),
@@ -295,16 +349,13 @@ export class Alarm extends AlarmBase {
   }
 
   /**
-   * Validate that if a region and account are in the given stat config, they match the Alarm
+   * Validate that if a region is in the given stat config, they match the Alarm
    */
   private validateMetricStat(stat: MetricStatConfig, metric: IMetric) {
     const stack = Stack.of(this);
 
     if (definitelyDifferent(stat.region, stack.region)) {
       throw new Error(`Cannot create an Alarm in region '${stack.region}' based on metric '${metric}' in '${stat.region}'`);
-    }
-    if (definitelyDifferent(stat.account, stack.account)) {
-      throw new Error(`Cannot create an Alarm in account '${stack.account}' based on metric '${metric}' in '${stat.account}'`);
     }
   }
 }
@@ -343,7 +394,10 @@ function renderIfExtendedStatistic(statistic?: string): string | undefined {
     // Already percentile. Avoid parsing because we might get into
     // floating point rounding issues, return as-is but lowercase the p.
     return statistic.toLowerCase();
+  } else if (parsed.type === 'generic') {
+    return statistic;
   }
+
   return undefined;
 }
 

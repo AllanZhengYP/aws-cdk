@@ -1,10 +1,14 @@
 import * as crypto from 'crypto';
 import * as iam from '@aws-cdk/aws-iam';
-import { Aws, CfnResource, Construct } from '@aws-cdk/core';
+import { Aws, CfnResource } from '@aws-cdk/core';
 import { InitElement } from './cfn-init-elements';
 import { OperatingSystemType } from './machine-image';
 import { InitBindOptions, InitElementConfig, InitElementType, InitPlatform } from './private/cfn-init-internal';
 import { UserData } from './user-data';
+
+// keep this import separate from other imports to reduce chance for merge conflicts with v2-main
+// eslint-disable-next-line no-duplicate-imports, import/order
+import { Construct } from '@aws-cdk/core';
 
 /**
  * A CloudFormation-init configuration
@@ -109,7 +113,7 @@ export class CloudFormationInit {
     const fingerprintInput = { config: resolvedConfig, assetHash: bindResult.assetHash };
     const fingerprint = contentHash(JSON.stringify(fingerprintInput)).substr(0, 16);
 
-    attachOptions.instanceRole.addToPolicy(new iam.PolicyStatement({
+    attachOptions.instanceRole.addToPrincipalPolicy(new iam.PolicyStatement({
       actions: ['cloudformation:DescribeStackResource', 'cloudformation:SignalResource'],
       resources: [Aws.STACK_ID],
     }));
@@ -120,7 +124,15 @@ export class CloudFormationInit {
 
     // To identify the resources that have the metadata and where the signal
     // needs to be sent, we need { region, stackName, logicalId }
-    const resourceLocator = `--region ${Aws.REGION} --stack ${Aws.STACK_NAME} --resource ${attachedResource.logicalId}`;
+    let resourceLocator = `--region ${Aws.REGION} --stack ${Aws.STACK_NAME} --resource ${attachedResource.logicalId}`;
+
+    // If specified in attachOptions, include arguments in cfn-init/cfn-signal commands
+    if (attachOptions.includeUrl) {
+      resourceLocator = `${resourceLocator} --url https://cloudformation.${Aws.REGION}.${Aws.URL_SUFFIX}`;
+    }
+    if (attachOptions.includeRole) {
+      resourceLocator = `${resourceLocator} --role ${attachOptions.instanceRole.roleName}`;
+    }
     const configSets = (attachOptions.configSets ?? ['default']).join(',');
     const printLog = attachOptions.printLog ?? true;
 
@@ -341,6 +353,25 @@ export interface AttachInitOptions {
    * Instance role of the consuming instance or fleet
    */
   readonly instanceRole: iam.IRole;
+
+  /**
+   * Include --url argument when running cfn-init and cfn-signal commands
+   *
+   * This will be the cloudformation endpoint in the deployed region
+   * e.g. https://cloudformation.us-east-1.amazonaws.com
+   *
+   * @default false
+   */
+  readonly includeUrl?: boolean;
+
+  /**
+   * Include --role argument when running cfn-init and cfn-signal commands
+   *
+   * This will be the IAM instance profile attached to the EC2 instance
+   *
+   * @default false
+   */
+  readonly includeRole?: boolean;
 
   /**
    * OS Platform the init config will be used for

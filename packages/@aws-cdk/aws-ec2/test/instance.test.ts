@@ -1,14 +1,13 @@
 import * as path from 'path';
-import { arrayWith, expect as cdkExpect, haveResource, ResourcePart, stringLike, SynthUtils } from '@aws-cdk/assert';
-import '@aws-cdk/assert/jest';
+import '@aws-cdk/assert-internal/jest';
+import { arrayWith, ResourcePart, stringLike, SynthUtils } from '@aws-cdk/assert-internal';
 import { Asset } from '@aws-cdk/aws-s3-assets';
 import { StringParameter } from '@aws-cdk/aws-ssm';
 import * as cxschema from '@aws-cdk/cloud-assembly-schema';
 import { Stack } from '@aws-cdk/core';
-import { nodeunitShim, Test } from 'nodeunit-shim';
 import {
   AmazonLinuxImage, BlockDeviceVolume, CloudFormationInit,
-  EbsDeviceVolumeType, InitCommand, Instance, InstanceClass, InstanceSize, InstanceType, UserData, Vpc,
+  EbsDeviceVolumeType, InitCommand, Instance, InstanceArchitecture, InstanceClass, InstanceSize, InstanceType, UserData, Vpc,
 } from '../lib';
 
 
@@ -19,23 +18,36 @@ beforeEach(() => {
   vpc = new Vpc(stack, 'VPC');
 });
 
-nodeunitShim({
-  'instance is created correctly'(test: Test) {
-    // WHEN
-    new Instance(stack, 'Instance', {
-      vpc,
-      machineImage: new AmazonLinuxImage(),
-      instanceType: InstanceType.of(InstanceClass.BURSTABLE4_GRAVITON, InstanceSize.LARGE),
-    });
+describe('instance', () => {
+  test('instance is created correctly', () => {
+    // GIVEN
+    const sampleInstances = [{
+      instanceClass: InstanceClass.BURSTABLE4_GRAVITON,
+      instanceSize: InstanceSize.LARGE,
+      instanceType: 't4g.large',
+    }, {
+      instanceClass: InstanceClass.HIGH_COMPUTE_MEMORY1,
+      instanceSize: InstanceSize.XLARGE3,
+      instanceType: 'z1d.3xlarge',
+    }];
 
-    // THEN
-    cdkExpect(stack).to(haveResource('AWS::EC2::Instance', {
-      InstanceType: 't4g.large',
-    }));
+    for (const [i, sampleInstance] of sampleInstances.entries()) {
+      // WHEN
+      new Instance(stack, `Instance${i}`, {
+        vpc,
+        machineImage: new AmazonLinuxImage(),
+        instanceType: InstanceType.of(sampleInstance.instanceClass, sampleInstance.instanceSize),
+      });
 
-    test.done();
-  },
-  'instance is created with source/dest check switched off'(test: Test) {
+      // THEN
+      expect(stack).toHaveResource('AWS::EC2::Instance', {
+        InstanceType: sampleInstance.instanceType,
+      });
+    }
+
+
+  });
+  test('instance is created with source/dest check switched off', () => {
     // WHEN
     new Instance(stack, 'Instance', {
       vpc,
@@ -45,14 +57,14 @@ nodeunitShim({
     });
 
     // THEN
-    cdkExpect(stack).to(haveResource('AWS::EC2::Instance', {
+    expect(stack).toHaveResource('AWS::EC2::Instance', {
       InstanceType: 't3.large',
       SourceDestCheck: false,
-    }));
+    });
 
-    test.done();
-  },
-  'instance is grantable'(test: Test) {
+
+  });
+  test('instance is grantable', () => {
     // GIVEN
     const param = new StringParameter(stack, 'Param', { stringValue: 'Foobar' });
     const instance = new Instance(stack, 'Instance', {
@@ -65,7 +77,7 @@ nodeunitShim({
     param.grantRead(instance);
 
     // THEN
-    cdkExpect(stack).to(haveResource('AWS::IAM::Policy', {
+    expect(stack).toHaveResource('AWS::IAM::Policy', {
       PolicyDocument: {
         Statement: [
           {
@@ -103,13 +115,90 @@ nodeunitShim({
         ],
         Version: '2012-10-17',
       },
-    }));
+    });
 
-    test.done();
-  },
 
-  blockDeviceMappings: {
-    'can set blockDeviceMappings'(test: Test) {
+  });
+  test('instance architecture is correctly discerned for arm instances', () => {
+    // GIVEN
+    const sampleInstanceClasses = [
+      'a1', 't4g', 'c6g', 'c6gd', 'c6gn', 'm6g', 'm6gd', 'r6g', 'r6gd', // current Graviton-based instance classes
+      'a13', 't11g', 'y10ng', 'z11ngd', // theoretical future Graviton-based instance classes
+    ];
+
+    for (const instanceClass of sampleInstanceClasses) {
+      // WHEN
+      const instanceType = InstanceType.of(instanceClass as InstanceClass, InstanceSize.XLARGE18);
+
+      // THEN
+      expect(instanceType.architecture).toBe(InstanceArchitecture.ARM_64);
+    }
+
+
+  });
+  test('instance architecture is correctly discerned for x86-64 instance', () => {
+    // GIVEN
+    const sampleInstanceClasses = ['c5', 'm5ad', 'r5n', 'm6', 't3a']; // A sample of x86-64 instance classes
+
+    for (const instanceClass of sampleInstanceClasses) {
+      // WHEN
+      const instanceType = InstanceType.of(instanceClass as InstanceClass, InstanceSize.XLARGE18);
+
+      // THEN
+      expect(instanceType.architecture).toBe(InstanceArchitecture.X86_64);
+    }
+
+
+  });
+  test('instances with local NVME drive are correctly named', () => {
+    // GIVEN
+    const sampleInstanceClassKeys = [{
+      key: 'R5D',
+      value: 'r5d',
+    }, {
+      key: 'MEMORY5_NVME_DRIVE',
+      value: 'r5d',
+    }, {
+      key: 'R5AD',
+      value: 'r5ad',
+    }, {
+      key: 'MEMORY5_AMD_NVME_DRIVE',
+      value: 'r5ad',
+    }, {
+      key: 'M5AD',
+      value: 'm5ad',
+    }, {
+      key: 'STANDARD5_AMD_NVME_DRIVE',
+      value: 'm5ad',
+    }]; // A sample of instances with NVME drives
+
+    for (const instanceClass of sampleInstanceClassKeys) {
+      // WHEN
+      const key = instanceClass.key as keyof(typeof InstanceClass);
+      const instanceType = InstanceClass[key];
+
+      // THEN
+      expect(instanceType).toBe(instanceClass.value);
+    }
+
+
+  });
+  test('instance architecture throws an error when instance type is invalid', () => {
+    // GIVEN
+    const malformedInstanceTypes = ['t4', 't4g.nano.', 't4gnano', ''];
+
+    for (const malformedInstanceType of malformedInstanceTypes) {
+      // WHEN
+      const instanceType = new InstanceType(malformedInstanceType);
+
+      // THEN
+      expect(() => instanceType.architecture).toThrow('Malformed instance type identifier');
+    }
+
+
+  });
+  describe('blockDeviceMappings', () => {
+    test('can set blockDeviceMappings', () => {
       // WHEN
       new Instance(stack, 'Instance', {
         vpc,
@@ -139,7 +228,7 @@ nodeunitShim({
       });
 
       // THEN
-      cdkExpect(stack).to(haveResource('AWS::EC2::Instance', {
+      expect(stack).toHaveResource('AWS::EC2::Instance', {
         BlockDeviceMappings: [
           {
             DeviceName: 'ebs',
@@ -166,14 +255,14 @@ nodeunitShim({
             VirtualName: 'ephemeral0',
           },
         ],
-      }));
+      });
 
-      test.done();
-    },
 
-    'throws if ephemeral volumeIndex < 0'(test: Test) {
+    });
+
+    test('throws if ephemeral volumeIndex < 0', () => {
       // THEN
-      test.throws(() => {
+      expect(() => {
         new Instance(stack, 'Instance', {
           vpc,
           machineImage: new AmazonLinuxImage(),
@@ -183,14 +272,14 @@ nodeunitShim({
             volume: BlockDeviceVolume.ephemeral(-1),
           }],
         });
-      }, /volumeIndex must be a number starting from 0/);
+      }).toThrow(/volumeIndex must be a number starting from 0/);
 
-      test.done();
-    },
 
-    'throws if volumeType === IO1 without iops'(test: Test) {
+    });
+
+    test('throws if volumeType === IO1 without iops', () => {
       // THEN
-      test.throws(() => {
+      expect(() => {
         new Instance(stack, 'Instance', {
           vpc,
           machineImage: new AmazonLinuxImage(),
@@ -204,12 +293,12 @@ nodeunitShim({
             }),
           }],
         });
-      }, /ops property is required with volumeType: EbsDeviceVolumeType.IO1/);
+      }).toThrow(/ops property is required with volumeType: EbsDeviceVolumeType.IO1/);
 
-      test.done();
-    },
 
-    'warning if iops without volumeType'(test: Test) {
+    });
+
+    test('warning if iops without volumeType', () => {
       const instance = new Instance(stack, 'Instance', {
         vpc,
         machineImage: new AmazonLinuxImage(),
@@ -225,13 +314,13 @@ nodeunitShim({
       });
 
       // THEN
-      test.deepEqual(instance.node.metadata[0].type, cxschema.ArtifactMetadataEntryType.WARN);
-      test.deepEqual(instance.node.metadata[0].data, 'iops will be ignored without volumeType: EbsDeviceVolumeType.IO1');
+      expect(instance.node.metadata[0].type).toEqual(cxschema.ArtifactMetadataEntryType.WARN);
+      expect(instance.node.metadata[0].data).toEqual('iops will be ignored without volumeType: EbsDeviceVolumeType.IO1');
 
-      test.done();
-    },
 
-    'warning if iops and volumeType !== IO1'(test: Test) {
+    });
+
+    test('warning if iops and volumeType !== IO1', () => {
       const instance = new Instance(stack, 'Instance', {
         vpc,
         machineImage: new AmazonLinuxImage(),
@@ -248,14 +337,14 @@ nodeunitShim({
       });
 
       // THEN
-      test.deepEqual(instance.node.metadata[0].type, cxschema.ArtifactMetadataEntryType.WARN);
-      test.deepEqual(instance.node.metadata[0].data, 'iops will be ignored without volumeType: EbsDeviceVolumeType.IO1');
+      expect(instance.node.metadata[0].type).toEqual(cxschema.ArtifactMetadataEntryType.WARN);
+      expect(instance.node.metadata[0].data).toEqual('iops will be ignored without volumeType: EbsDeviceVolumeType.IO1');
 
-      test.done();
-    },
-  },
 
-  'instance can be created with Private IP Address'(test: Test) {
+    });
+  });
+
+  test('instance can be created with Private IP Address', () => {
     // WHEN
     new Instance(stack, 'Instance', {
       vpc,
@@ -265,14 +354,15 @@ nodeunitShim({
     });
 
     // THEN
-    cdkExpect(stack).to(haveResource('AWS::EC2::Instance', {
+    expect(stack).toHaveResource('AWS::EC2::Instance', {
       InstanceType: 't3.large',
       PrivateIpAddress: '10.0.0.2',
-    }));
+    });
 
-    test.done();
-  },
+
+  });
 });
+
 
 test('add CloudFormation Init to instance', () => {
   // GIVEN
@@ -313,14 +403,14 @@ test('add CloudFormation Init to instance', () => {
       Version: '2012-10-17',
     },
   });
-  cdkExpect(stack).to(haveResource('AWS::EC2::Instance', {
+  expect(stack).toHaveResource('AWS::EC2::Instance', {
     CreationPolicy: {
       ResourceSignal: {
         Count: 1,
         Timeout: 'PT5M',
       },
     },
-  }, ResourcePart.CompleteDefinition));
+  }, ResourcePart.CompleteDefinition);
 });
 
 test('cause replacement from s3 asset in userdata', () => {
