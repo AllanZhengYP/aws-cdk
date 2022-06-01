@@ -18,7 +18,7 @@ will first upload all the assets to S3, and only then deploy the stacks. The S3
 locations of the uploaded assets will be passed in as CloudFormation Parameters
 to the relevant stacks.
 
-The following JavaScript example defines an directory asset which is archived as
+The following JavaScript example defines a directory asset which is archived as
 a .zip file and uploaded to S3 during deployment.
 
 [Example of a ZipDirectoryAsset](./test/integ.assets.directory.lit.ts)
@@ -46,7 +46,7 @@ In the following example, the various asset attributes are exported as stack out
 IAM roles, users or groups which need to be able to read assets in runtime will should be
 granted IAM permissions. To do that use the `asset.grantRead(principal)` method:
 
-The following examples grants an IAM group read permissions on an asset:
+The following example grants an IAM group read permissions on an asset:
 
 [Example of granting read access to an asset](./test/integ.assets.permissions.lit.ts)
 
@@ -95,18 +95,21 @@ method `tryBundle()` which should return `true` if local bundling was performed.
 If `false` is returned, docker bundling will be done:
 
 ```ts
+class MyBundle implements ILocalBundling {
+  public tryBundle(outputDir: string, options: BundlingOptions) {
+    const canRunLocally = true // replace with actual logic
+    if (canRunLocally) {
+      // perform local bundling here
+      return true;
+    }
+    return false; 
+  }
+}
+
 new assets.Asset(this, 'BundledAsset', {
   path: '/path/to/asset',
   bundling: {
-    local: {
-      tryBundle(outputDir: string, options: BundlingOptions) {
-        if (canRunLocally) {
-          // perform local bundling here
-          return true;
-        }
-        return false;
-      },
-    },
+    local: new MyBundle(),
     // Docker bundling fallback
     image: DockerImage.fromRegistry('alpine'),
     entrypoint: ['/bin/sh', '-c'],

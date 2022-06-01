@@ -491,7 +491,7 @@ const queueProcessingFargateService = new ecsPatterns.QueueProcessingFargateServ
   memoryLimitMiB: 512,
   image: ecs.ContainerImage.fromRegistry('test'),
   securityGroups: [securityGroup],
-  taskSubnets: { subnetType: ec2.SubnetType.ISOLATED },
+  taskSubnets: { subnetType: ec2.SubnetType.PRIVATE_ISOLATED },
 });
 ```
 
@@ -541,6 +541,26 @@ const queueProcessingFargateService = new ecsPatterns.QueueProcessingFargateServ
       weight: 1,
     },
   ],
+});
+```
+
+### Set a custom container-level Healthcheck for QueueProcessingFargateService
+
+```ts
+declare const vpc: ec2.Vpc;
+declare const securityGroup: ec2.SecurityGroup;
+const queueProcessingFargateService = new ecsPatterns.QueueProcessingFargateService(this, 'Service', {
+  vpc,
+  memoryLimitMiB: 512,
+  image: ecs.ContainerImage.fromRegistry('test'),
+  healthCheck: {
+    command: [ "CMD-SHELL", "curl -f http://localhost/ || exit 1" ],
+    // the properties below are optional
+    interval: Duration.minutes(30),
+    retries: 123,
+    startPeriod: Duration.minutes(30),
+    timeout: Duration.minutes(30),
+  },
 });
 ```
 

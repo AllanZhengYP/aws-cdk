@@ -1,7 +1,9 @@
 import * as cdk from '@aws-cdk/core';
-import { Default, RegionInfo } from '@aws-cdk/region-info';
+import { Default, FactName, RegionInfo } from '@aws-cdk/region-info';
 import { IOpenIdConnectProvider } from './oidc-provider';
+import { PolicyDocument } from './policy-document';
 import { Condition, Conditions, PolicyStatement } from './policy-statement';
+import { defaultAddPrincipalToAssumeRole } from './private/assume-role-policy';
 import { ISamlProvider } from './saml-provider';
 import { LITERAL_STRING_KEY, mergePrincipal } from './util';
 
@@ -69,6 +71,58 @@ export interface IPrincipal extends IGrantable {
 }
 
 /**
+ * Interface for principals that can be compared.
+ *
+ * This only needs to be implemented for principals that could potentially be value-equal.
+ * Identity-equal principals will be handled correctly by default.
+ */
+export interface IComparablePrincipal extends IPrincipal {
+  /**
+   * Return a string format of this principal which should be identical if the two
+   * principals are the same.
+   */
+  dedupeString(): string | undefined;
+}
+
+/**
+ * Helper class for working with `IComparablePrincipal`s
+ */
+export class ComparablePrincipal {
+  /**
+   * Whether or not the given principal is a comparable principal
+   */
+  public static isComparablePrincipal(x: IPrincipal): x is IComparablePrincipal {
+    return 'dedupeString' in x;
+  }
+
+  /**
+   * Return the dedupeString of the given principal, if available
+   */
+  public static dedupeStringFor(x: IPrincipal): string | undefined {
+    return ComparablePrincipal.isComparablePrincipal(x) ? x.dedupeString() : undefined;
+  }
+}
+
+/**
+ * A type of principal that has more control over its own representation in AssumeRolePolicyDocuments
+ *
+ * More complex types of identity providers need more control over Role's policy documents
+ * than simply `{ Effect: 'Allow', Action: 'AssumeRole', Principal: <Whatever> }`.
+ *
+ * If that control is necessary, they can implement `IAssumeRolePrincipal` to get full
+ * access to a Role's AssumeRolePolicyDocument.
+ */
+export interface IAssumeRolePrincipal extends IPrincipal {
+  /**
+   * Add the princpial to the AssumeRolePolicyDocument
+   *
+   * Add the statements to the AssumeRolePolicyDocument necessary to give this principal
+   * permissions to assume the given role.
+   */
+  addToAssumeRolePolicy(document: PolicyDocument): void;
+}
+
+/**
  * Result of calling `addToPrincipalPolicy`
  */
 export interface AddToPrincipalPolicyResult {
@@ -89,7 +143,7 @@ export interface AddToPrincipalPolicyResult {
 /**
  * Base class for policy principals
  */
-export abstract class PrincipalBase implements IPrincipal {
+export abstract class PrincipalBase implements IAssumeRolePrincipal, IComparablePrincipal {
   public readonly grantPrincipal: IPrincipal = this;
   public readonly principalAccount: string | undefined = undefined;
 
@@ -111,6 +165,14 @@ export abstract class PrincipalBase implements IPrincipal {
     // This base class is used for non-identity principals. None of them
     // have a PolicyDocument to add to.
     return { statementAdded: false };
+  }
+
+  public addToAssumeRolePolicy(document: PolicyDocument): void {
+    // Default implementation of this protocol, compatible with the legacy behavior
+    document.addStatements(new PolicyStatement({
+      actions: [this.assumeRoleAction],
+      principals: [this],
+    }));
   }
 
   public toString() {
@@ -138,8 +200,51 @@ export abstract class PrincipalBase implements IPrincipal {
    *
    * @returns a new PrincipalWithConditions object.
    */
-  public withConditions(conditions: Conditions): IPrincipal {
+  public withConditions(conditions: Conditions): PrincipalBase {
     return new PrincipalWithConditions(this, conditions);
+  }
+
+  /**
+   * Returns a new principal using this principal as the base, with session tags enabled.
+   *
+   * @returns a new SessionTagsPrincipal object.
+   */
+  public withSessionTags(): PrincipalBase {
+    return new SessionTagsPrincipal(this);
+  }
+
+  /**
+   * Return whether or not this principal is equal to the given principal
+   */
+  public abstract dedupeString(): string | undefined;
+}
+
+/**
+ * Base class for Principals that wrap other principals
+ */
+abstract class PrincipalAdapter extends PrincipalBase {
+  public readonly assumeRoleAction = this.wrapped.assumeRoleAction;
+  public readonly principalAccount = this.wrapped.principalAccount;
+
+  constructor(protected readonly wrapped: IPrincipal) {
+    super();
+  }
+
+  public get policyFragment(): PrincipalPolicyFragment { return this.wrapped.policyFragment; }
+
+  addToPolicy(statement: PolicyStatement): boolean {
+    return this.wrapped.addToPolicy(statement);
+  }
+  addToPrincipalPolicy(statement: PolicyStatement): AddToPrincipalPolicyResult {
+    return this.wrapped.addToPrincipalPolicy(statement);
+  }
+
+  /**
+   * Append the given string to the wrapped principal's dedupe string (if available)
+   */
+  protected appendDedupe(append: string): string | undefined {
+    const inner = ComparablePrincipal.dedupeStringFor(this.wrapped);
+    return inner !== undefined ? `${this.constructor.name}:${inner}:${append}` : undefined;
   }
 }
 
@@ -149,15 +254,11 @@ export abstract class PrincipalBase implements IPrincipal {
  * For more information about conditions, see:
  * https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition.html
  */
-export class PrincipalWithConditions implements IPrincipal {
-  public readonly grantPrincipal: IPrincipal = this;
-  public readonly assumeRoleAction: string = this.principal.assumeRoleAction;
+export class PrincipalWithConditions extends PrincipalAdapter {
   private additionalConditions: Conditions;
 
-  constructor(
-    private readonly principal: IPrincipal,
-    conditions: Conditions,
-  ) {
+  constructor(principal: IPrincipal, conditions: Conditions) {
+    super(principal);
     this.additionalConditions = conditions;
   }
 
@@ -186,27 +287,15 @@ export class PrincipalWithConditions implements IPrincipal {
    * See [the IAM documentation](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition.html).
    */
   public get conditions() {
-    return this.mergeConditions(this.principal.policyFragment.conditions, this.additionalConditions);
+    return this.mergeConditions(this.wrapped.policyFragment.conditions, this.additionalConditions);
   }
 
   public get policyFragment(): PrincipalPolicyFragment {
-    return new PrincipalPolicyFragment(this.principal.policyFragment.principalJson, this.conditions);
-  }
-
-  public get principalAccount(): string | undefined {
-    return this.principal.principalAccount;
-  }
-
-  public addToPolicy(statement: PolicyStatement): boolean {
-    return this.addToPrincipalPolicy(statement).statementAdded;
-  }
-
-  public addToPrincipalPolicy(statement: PolicyStatement): AddToPrincipalPolicyResult {
-    return this.principal.addToPrincipalPolicy(statement);
+    return new PrincipalPolicyFragment(this.wrapped.policyFragment.principalJson, this.conditions);
   }
 
   public toString() {
-    return this.principal.toString();
+    return this.wrapped.toString();
   }
 
   /**
@@ -217,6 +306,10 @@ export class PrincipalWithConditions implements IPrincipal {
   public toJSON() {
     // Have to implement toJSON() because the default will lead to infinite recursion.
     return this.policyFragment.principalJson;
+  }
+
+  public dedupeString(): string | undefined {
+    return this.appendDedupe(JSON.stringify(this.conditions));
   }
 
   private mergeConditions(principalConditions: Conditions, additionalConditions: Conditions): Conditions {
@@ -244,6 +337,34 @@ export class PrincipalWithConditions implements IPrincipal {
       mergedConditions[operator] = { ...existing, ...condition };
     });
     return mergedConditions;
+  }
+}
+
+/**
+ * Enables session tags on role assumptions from a principal
+ *
+ * For more information on session tags, see:
+ * https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html
+ */
+export class SessionTagsPrincipal extends PrincipalAdapter {
+  constructor(principal: IPrincipal) {
+    super(principal);
+  }
+
+  public addToAssumeRolePolicy(doc: PolicyDocument) {
+    // Lazy import to avoid circular import dependencies during startup
+
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const adapter: typeof import('./private/policydoc-adapter') = require('./private/policydoc-adapter');
+
+    defaultAddPrincipalToAssumeRole(this.wrapped, new adapter.MutatingPolicyDocumentAdapter(doc, (statement) => {
+      statement.addActions('sts:TagSession');
+      return statement;
+    }));
+  }
+
+  public dedupeString(): string | undefined {
+    return this.appendDedupe('');
   }
 }
 
@@ -301,6 +422,22 @@ export class ArnPrincipal extends PrincipalBase {
   public toString() {
     return `ArnPrincipal(${this.arn})`;
   }
+
+  /**
+   * A convenience method for adding a condition that the principal is part of the specified
+   * AWS Organization.
+   */
+  public inOrganization(organizationId: string) {
+    return this.withConditions({
+      StringEquals: {
+        'aws:PrincipalOrgID': organizationId,
+      },
+    });
+  }
+
+  public dedupeString(): string | undefined {
+    return `ArnPrincipal:${this.arn}`;
+  }
 }
 
 /**
@@ -315,6 +452,9 @@ export class AccountPrincipal extends ArnPrincipal {
    */
   constructor(public readonly accountId: any) {
     super(new StackDependentToken(stack => `arn:${stack.partition}:iam::${accountId}:root`).toString());
+    if (!cdk.Token.isUnresolved(accountId) && typeof accountId !== 'string') {
+      throw new Error('accountId should be of type string');
+    }
     this.principalAccount = accountId;
   }
 
@@ -330,7 +470,8 @@ export interface ServicePrincipalOpts {
   /**
    * The region in which the service is operating.
    *
-   * @default the current Stack's region.
+   * @default - the current Stack's region.
+   * @deprecated You should not need to set this. The stack's region is always correct.
    */
   readonly region?: string;
 
@@ -346,6 +487,21 @@ export interface ServicePrincipalOpts {
  * An IAM principal that represents an AWS service (i.e. sqs.amazonaws.com).
  */
 export class ServicePrincipal extends PrincipalBase {
+  /**
+   * Translate the given service principal name based on the region it's used in.
+   *
+   * For example, for Chinese regions this may (depending on whether that's necessary
+   * for the given service principal) append `.cn` to the name.
+   *
+   * The `region-info` module is used to obtain this information.
+   *
+   * @example
+   * const principalName = iam.ServicePrincipal.servicePrincipalName('ec2.amazonaws.com');
+   */
+  public static servicePrincipalName(service: string): string {
+    return new ServicePrincipalToken(service, {}).toString();
+  }
+
   /**
    *
    * @param service AWS service (i.e. sqs.amazonaws.com)
@@ -364,6 +520,10 @@ export class ServicePrincipal extends PrincipalBase {
 
   public toString() {
     return `ServicePrincipal(${this.service})`;
+  }
+
+  public dedupeString(): string | undefined {
+    return `ServicePrincipal:${this.service}:${JSON.stringify(this.opts)}`;
   }
 }
 
@@ -388,6 +548,10 @@ export class OrganizationPrincipal extends PrincipalBase {
 
   public toString() {
     return `OrganizationPrincipal(${this.organizationId})`;
+  }
+
+  public dedupeString(): string | undefined {
+    return `OrganizationPrincipal:${this.organizationId}`;
   }
 }
 
@@ -422,6 +586,10 @@ export class CanonicalUserPrincipal extends PrincipalBase {
   public toString() {
     return `CanonicalUserPrincipal(${this.canonicalUserId})`;
   }
+
+  public dedupeString(): string | undefined {
+    return `CanonicalUserPrincipal:${this.canonicalUserId}`;
+  }
 }
 
 /**
@@ -440,6 +608,7 @@ export class FederatedPrincipal extends PrincipalBase {
    * @param federated federated identity provider (i.e. 'cognito-identity.amazonaws.com' for users authenticated through Cognito)
    * @param conditions The conditions under which the policy is in effect.
    *   See [the IAM documentation](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition.html).
+   * @param sessionTags Whether to enable session tagging (see https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html)
    */
   constructor(
     public readonly federated: string,
@@ -457,6 +626,10 @@ export class FederatedPrincipal extends PrincipalBase {
   public toString() {
     return `FederatedPrincipal(${this.federated})`;
   }
+
+  public dedupeString(): string | undefined {
+    return `FederatedPrincipal:${this.federated}:${this.assumeRoleAction}:${JSON.stringify(this.conditions)}`;
+  }
 }
 
 /**
@@ -470,6 +643,7 @@ export class WebIdentityPrincipal extends FederatedPrincipal {
    * @param identityProvider identity provider (i.e. 'cognito-identity.amazonaws.com' for users authenticated through Cognito)
    * @param conditions The conditions under which the policy is in effect.
    *   See [the IAM documentation](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_elements_condition.html).
+   * @param sessionTags Whether to enable session tagging (see https://docs.aws.amazon.com/IAM/latest/UserGuide/id_session-tags.html)
    */
   constructor(identityProvider: string, conditions: Conditions = {}) {
     super(identityProvider, conditions ?? {}, 'sts:AssumeRoleWithWebIdentity');
@@ -597,6 +771,10 @@ export class StarPrincipal extends PrincipalBase {
   public toString() {
     return 'StarPrincipal()';
   }
+
+  public dedupeString(): string | undefined {
+    return 'StarPrincipal';
+  }
 }
 
 /**
@@ -605,9 +783,9 @@ export class StarPrincipal extends PrincipalBase {
  */
 export class CompositePrincipal extends PrincipalBase {
   public readonly assumeRoleAction: string;
-  private readonly principals = new Array<PrincipalBase>();
+  private readonly principals = new Array<IPrincipal>();
 
-  constructor(...principals: PrincipalBase[]) {
+  constructor(...principals: IPrincipal[]) {
     super();
     if (principals.length === 0) {
       throw new Error('CompositePrincipals must be constructed with at least 1 Principal but none were passed.');
@@ -622,28 +800,29 @@ export class CompositePrincipal extends PrincipalBase {
    *
    * @param principals IAM principals that will be added to the composite principal
    */
-  public addPrincipals(...principals: PrincipalBase[]): this {
-    for (const p of principals) {
-      if (p.assumeRoleAction !== this.assumeRoleAction) {
-        throw new Error(
-          'Cannot add multiple principals with different "assumeRoleAction". ' +
-          `Expecting "${this.assumeRoleAction}", got "${p.assumeRoleAction}"`);
-      }
+  public addPrincipals(...principals: IPrincipal[]): this {
+    this.principals.push(...principals);
+    return this;
+  }
 
+  public addToAssumeRolePolicy(doc: PolicyDocument) {
+    for (const p of this.principals) {
+      defaultAddPrincipalToAssumeRole(p, doc);
+    }
+  }
+
+  public get policyFragment(): PrincipalPolicyFragment {
+    // We only have a problem with conditions if we are trying to render composite
+    // princpals into a single statement (which is when `policyFragment` would get called)
+    for (const p of this.principals) {
       const fragment = p.policyFragment;
       if (fragment.conditions && Object.keys(fragment.conditions).length > 0) {
         throw new Error(
           'Components of a CompositePrincipal must not have conditions. ' +
           `Tried to add the following fragment: ${JSON.stringify(fragment)}`);
       }
-
-      this.principals.push(p);
     }
 
-    return this;
-  }
-
-  public get policyFragment(): PrincipalPolicyFragment {
     const principalJson: { [key: string]: string[] } = {};
 
     for (const p of this.principals) {
@@ -655,6 +834,12 @@ export class CompositePrincipal extends PrincipalBase {
 
   public toString() {
     return `CompositePrincipal(${this.principals})`;
+  }
+
+  public dedupeString(): string | undefined {
+    const inner = this.principals.map(ComparablePrincipal.dedupeStringFor);
+    if (inner.some(x => x === undefined)) { return undefined; }
+    return `CompositePrincipal[${inner.join(',')}]`;
   }
 }
 
@@ -694,9 +879,17 @@ class ServicePrincipalToken implements cdk.IResolvable {
   }
 
   public resolve(ctx: cdk.IResolveContext) {
-    const region = this.opts.region || cdk.Stack.of(ctx.scope).region;
-    const fact = RegionInfo.get(region).servicePrincipal(this.service);
-    return fact || Default.servicePrincipal(this.service, region, cdk.Aws.URL_SUFFIX);
+    if (this.opts.region) {
+      // Special case, handle it separately to not break legacy behavior.
+      return RegionInfo.get(this.opts.region).servicePrincipal(this.service) ??
+        Default.servicePrincipal(this.service, this.opts.region, cdk.Aws.URL_SUFFIX);
+    }
+
+    const stack = cdk.Stack.of(ctx.scope);
+    return stack.regionalFact(
+      FactName.servicePrincipal(this.service),
+      Default.servicePrincipal(this.service, stack.region, cdk.Aws.URL_SUFFIX),
+    );
   }
 
   public toString() {

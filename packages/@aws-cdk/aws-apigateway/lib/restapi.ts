@@ -1,7 +1,7 @@
 import * as cloudwatch from '@aws-cdk/aws-cloudwatch';
 import { IVpcEndpoint } from '@aws-cdk/aws-ec2';
 import * as iam from '@aws-cdk/aws-iam';
-import { ArnFormat, CfnOutput, IResource as IResourceBase, Resource, Stack } from '@aws-cdk/core';
+import { ArnFormat, CfnOutput, IResource as IResourceBase, Resource, Stack, Token } from '@aws-cdk/core';
 import { Construct } from 'constructs';
 import { ApiDefinition } from './api-definition';
 import { ApiKey, ApiKeyOptions, IApiKey } from './api-key';
@@ -312,15 +312,21 @@ export abstract class RestApiBase extends Resource implements IRestApi {
 
   /**
    * A human friendly name for this Rest API. Note that this is different from `restApiId`.
+   * @attribute
    */
   public readonly restApiName: string;
 
   private _latestDeployment?: Deployment;
   private _domainName?: DomainName;
 
+  protected cloudWatchAccount?: CfnAccount;
+
   constructor(scope: Construct, id: string, props: RestApiBaseProps = { }) {
-    super(scope, id);
-    this.restApiName = props.restApiName ?? id;
+    const restApiName = props.restApiName ?? id;
+    super(scope, id, {
+      physicalName: restApiName,
+    });
+    this.restApiName = restApiName;
 
     Object.defineProperty(this, RESTAPI_SYMBOL, { value: true });
   }
@@ -362,7 +368,7 @@ export abstract class RestApiBase extends Resource implements IRestApi {
   }
 
   public arnForExecuteApi(method: string = '*', path: string = '/*', stage: string = '*') {
-    if (!path.startsWith('/')) {
+    if (!Token.isUnresolved(path) && !path.startsWith('/')) {
       throw new Error(`"path" must begin with a "/": '${path}'`);
     }
 
@@ -500,6 +506,17 @@ export abstract class RestApiBase extends Resource implements IRestApi {
   }
 
   /**
+   * Associates a Stage with this REST API
+   *
+   * @internal
+   */
+  public _attachStage(stage: Stage) {
+    if (this.cloudWatchAccount) {
+      stage.node.addDependency(this.cloudWatchAccount);
+    }
+  }
+
+  /**
    * @internal
    */
   protected _configureCloudWatchRole(apiResource: CfnRestApi) {
@@ -508,11 +525,11 @@ export abstract class RestApiBase extends Resource implements IRestApi {
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName('service-role/AmazonAPIGatewayPushToCloudWatchLogs')],
     });
 
-    const resource = new CfnAccount(this, 'Account', {
+    this.cloudWatchAccount = new CfnAccount(this, 'Account', {
       cloudWatchRoleArn: role.roleArn,
     });
 
-    resource.node.addDependency(apiResource);
+    this.cloudWatchAccount.node.addDependency(apiResource);
   }
 
   /**
@@ -722,7 +739,7 @@ export class RestApi extends RestApiBase {
     super(scope, id, props);
 
     const resource = new CfnRestApi(this, 'Resource', {
-      name: this.restApiName,
+      name: this.physicalName,
       description: props.description,
       policy: props.policy,
       failOnWarnings: props.failOnWarnings,

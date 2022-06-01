@@ -1,4 +1,4 @@
-import '@aws-cdk/assert-internal/jest';
+import { Template, Match } from '@aws-cdk/assertions';
 import { Stack } from '@aws-cdk/core';
 import * as iam from '../lib';
 
@@ -33,7 +33,7 @@ describe('ImmutableRole', () => {
 
     immutableRole.attachInlinePolicy(policy);
 
-    expect(stack).toHaveResource('AWS::IAM::Policy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
       'PolicyDocument': {
         'Statement': [
           {
@@ -53,12 +53,63 @@ describe('ImmutableRole', () => {
     });
   });
 
+  test('id of mutable role remains unchanged', () => {
+    iam.Role.fromRoleName(stack, 'TestRole123', 'my-role');
+    expect(stack.node.tryFindChild('TestRole123')).not.toBeUndefined();
+    expect(stack.node.tryFindChild('MutableRoleTestRole123')).toBeUndefined();
+  });
+
+  test('remains mutable when called multiple times', () => {
+    const user = new iam.User(stack, 'User');
+    const policy = new iam.Policy(stack, 'Policy', {
+      statements: [new iam.PolicyStatement({
+        resources: ['*'],
+        actions: ['s3:*'],
+      })],
+      users: [user],
+    });
+
+    function findRole(): iam.IRole {
+      const foundRole = stack.node.tryFindChild('MyRole') as iam.IRole;
+      if (foundRole) {
+        return foundRole;
+      }
+      return iam.Role.fromRoleArn(stack, 'MyRole', 'arn:aws:iam::12345:role/role-name', { mutable: false });
+    }
+
+    let foundRole = findRole();
+    foundRole.attachInlinePolicy(policy);
+    foundRole = findRole();
+    foundRole.attachInlinePolicy(policy);
+
+    expect(stack.node.tryFindChild('MutableRoleMyRole')).not.toBeUndefined();
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
+      'PolicyDocument': {
+        'Statement': [
+          {
+            'Action': 's3:*',
+            'Resource': '*',
+            'Effect': 'Allow',
+          },
+        ],
+        'Version': '2012-10-17',
+      },
+      'PolicyName': 'Policy23B91518',
+      'Roles': Match.absent(),
+      'Users': [
+        {
+          'Ref': 'User00B015A1',
+        },
+      ],
+    });
+  });
+
   test('ignores calls to addManagedPolicy', () => {
     mutableRole.addManagedPolicy({ managedPolicyArn: 'Arn1' });
 
     immutableRole.addManagedPolicy({ managedPolicyArn: 'Arn2' });
 
-    expect(stack).toHaveResourceLike('AWS::IAM::Role', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Role', {
       'ManagedPolicyArns': [
         'Arn1',
       ],
@@ -76,7 +127,7 @@ describe('ImmutableRole', () => {
       actions: ['s3:*'],
     }));
 
-    expect(stack).toHaveResource('AWS::IAM::Policy', {
+    Template.fromStack(stack).hasResourceProperties('AWS::IAM::Policy', {
       'PolicyDocument': {
         'Version': '2012-10-17',
         'Statement': [
@@ -98,7 +149,7 @@ describe('ImmutableRole', () => {
       resourceArns: ['*'],
     });
 
-    expect(stack).not.toHaveResourceLike('AWS::IAM::Policy', {
+    expect(Template.fromStack(stack).findResources('AWS::IAM::Policy', {
       'PolicyDocument': {
         'Statement': [
           {
@@ -108,7 +159,7 @@ describe('ImmutableRole', () => {
           },
         ],
       },
-    });
+    })).toEqual({});
   });
 
   // this pattern is used here:

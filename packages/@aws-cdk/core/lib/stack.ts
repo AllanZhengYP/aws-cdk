@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as cxschema from '@aws-cdk/cloud-assembly-schema';
 import * as cxapi from '@aws-cdk/cx-api';
 import { IConstruct, Construct, Node } from 'constructs';
+import * as minimatch from 'minimatch';
 import { Annotations } from './annotations';
 import { App } from './app';
 import { Arn, ArnComponents, ArnFormat } from './arn';
@@ -370,6 +371,9 @@ export class Stack extends CoreConstruct implements ITaggable {
     }
 
     this._stackName = props.stackName ?? this.generateStackName();
+    if (this._stackName.length > 128) {
+      throw new Error(`Stack name must be <= 128 characters. Stack name: '${this._stackName}'`);
+    }
     this.tags = new TagManager(TagType.KEY_VALUE, 'aws:cdk:stack', props.tags);
 
     if (!VALID_STACK_NAME_REGEX.test(this.stackName)) {
@@ -787,12 +791,13 @@ export class Stack extends CoreConstruct implements ITaggable {
       const numberOfResources = Object.keys(resources).length;
 
       if (numberOfResources > this.maxResources) {
-        throw new Error(`Number of resources in stack '${this.node.path}': ${numberOfResources} is greater than allowed maximum of ${this.maxResources}`);
+        const counts = Object.entries(count(Object.values(resources).map((r: any) => `${r?.Type}`))).map(([type, c]) => `${type} (${c})`).join(', ');
+        throw new Error(`Number of resources in stack '${this.node.path}': ${numberOfResources} is greater than allowed maximum of ${this.maxResources}: ${counts}`);
       } else if (numberOfResources >= (this.maxResources * 0.8)) {
         Annotations.of(this).addInfo(`Number of resources: ${numberOfResources} is approaching allowed maximum of ${this.maxResources}`);
       }
     }
-    fs.writeFileSync(outPath, JSON.stringify(template, undefined, 2));
+    fs.writeFileSync(outPath, JSON.stringify(template, undefined, 1));
 
     for (const ctx of this._missingContext) {
       if (lookupRoleArn != null) {
@@ -802,6 +807,45 @@ export class Stack extends CoreConstruct implements ITaggable {
       }
     }
   }
+
+  /**
+   * Look up a fact value for the given fact for the region of this stack
+   *
+   * Will return a definite value only if the region of the current stack is resolved.
+   * If not, a lookup map will be added to the stack and the lookup will be done at
+   * CDK deployment time.
+   *
+   * What regions will be included in the lookup map is controlled by the
+   * `@aws-cdk/core:target-partitions` context value: it must be set to a list
+   * of partitions, and only regions from the given partitions will be included.
+   * If no such context key is set, all regions will be included.
+   *
+   * This function is intended to be used by construct library authors. Application
+   * builders can rely on the abstractions offered by construct libraries and do
+   * not have to worry about regional facts.
+   *
+   * If `defaultValue` is not given, it is an error if the fact is unknown for
+   * the given region.
+   */
+  public regionalFact(factName: string, defaultValue?: string): string {
+    if (!Token.isUnresolved(this.region)) {
+      const ret = Fact.find(this.region, factName) ?? defaultValue;
+      if (ret === undefined) {
+        throw new Error(`region-info: don't know ${factName} for region ${this.region}. Use 'Fact.register' to provide this value.`);
+      }
+      return ret;
+    }
+
+    const partitions = Node.of(this).tryGetContext(cxapi.TARGET_PARTITIONS);
+    if (partitions !== undefined && !Array.isArray(partitions)) {
+      throw new Error(`Context value '${cxapi.TARGET_PARTITIONS}' should be a list of strings, got: ${JSON.stringify(cxapi.TARGET_PARTITIONS)}`);
+    }
+
+    const lookupMap = partitions ? RegionInfo.limitedRegionMap(factName, partitions) : RegionInfo.regionMap(factName);
+
+    return deployTimeLookup(this, factName, lookupMap, defaultValue);
+  }
+
 
   /**
    * Create a CloudFormation Export for a value
@@ -861,6 +905,14 @@ export class Stack extends CoreConstruct implements ITaggable {
     const resolvable = Tokenization.reverse(exportedValue);
     if (!resolvable || !Reference.isReference(resolvable)) {
       throw new Error('exportValue: either supply \'name\' or make sure to export a resource attribute (like \'bucket.bucketName\')');
+    }
+
+    // if exportValue is being called manually (which is pre onPrepare) then the logicalId
+    // could potentially be changed by a call to overrideLogicalId. This would cause our Export/Import
+    // to have an incorrect id. For a better user experience, lock the logicalId and throw an error
+    // if the user tries to override the id _after_ calling exportValue
+    if (CfnElement.isCfnElement(resolvable.target)) {
+      resolvable.target._lockLogicalId();
     }
 
     // "teleport" the value here, in case it comes from a nested stack. This will also
@@ -1114,6 +1166,19 @@ export class Stack extends CoreConstruct implements ITaggable {
 
     return makeStackName(ids);
   }
+
+  /**
+   * Indicates whether the stack requires bundling or not
+   */
+  public get bundlingRequired() {
+    const bundlingStacks: string[] = this.node.tryGetContext(cxapi.BUNDLING_STACKS) ?? ['*'];
+
+    // bundlingStacks is of the form `Stage/Stack`, convert it to `Stage-Stack` before comparing to stack name
+    return bundlingStacks.some(pattern => minimatch(
+      this.stackName,
+      pattern.replace('/', '-'),
+    ));
+  }
 }
 
 function merge(template: any, fragment: any): void {
@@ -1301,6 +1366,18 @@ export interface ExportValueOptions {
   readonly name?: string;
 }
 
+function count(xs: string[]): Record<string, number> {
+  const ret: Record<string, number> = {};
+  for (const x of xs) {
+    if (x in ret) {
+      ret[x] += 1;
+    } else {
+      ret[x] = 1;
+    }
+  }
+  return ret;
+}
+
 // These imports have to be at the end to prevent circular imports
 import { CfnOutput } from './cfn-output';
 import { addDependency } from './deps';
@@ -1313,3 +1390,6 @@ import { Stage } from './stage';
 import { ITaggable, TagManager } from './tag-manager';
 import { Token, Tokenization } from './token';
 import { referenceNestedStackValueInParent } from './private/refs';
+import { Fact, RegionInfo } from '@aws-cdk/region-info';
+import { deployTimeLookup } from './private/region-lookup';
+

@@ -1,6 +1,5 @@
-import '@aws-cdk/assert-internal/jest';
 import * as path from 'path';
-import { ABSENT, ResourcePart } from '@aws-cdk/assert-internal';
+import { Match, Template } from '@aws-cdk/assertions';
 import * as ecr from '@aws-cdk/aws-ecr';
 import { testFutureBehavior } from '@aws-cdk/cdk-build-tools';
 import * as cdk from '@aws-cdk/core';
@@ -20,6 +19,7 @@ describe('code', () => {
         .toThrow(/Lambda source is too large, must be <= 4096 but is 4097/);
     });
   });
+
   describe('lambda.Code.fromAsset', () => {
     test('fails if a non-zip asset is used', () => {
       // GIVEN
@@ -71,12 +71,13 @@ describe('code', () => {
       });
 
       // THEN
-      expect(stack).toHaveResource('AWS::Lambda::Function', {
+      Template.fromStack(stack).hasResource('AWS::Lambda::Function', {
         Metadata: {
           [cxapi.ASSET_RESOURCE_METADATA_PATH_KEY]: 'asset.9678c34eca93259d11f2d714177347afd66c50116e1e08996eff893d3ca81232',
+          [cxapi.ASSET_RESOURCE_METADATA_IS_BUNDLED_KEY]: false,
           [cxapi.ASSET_RESOURCE_METADATA_PROPERTY_KEY]: 'Code',
         },
-      }, ResourcePart.CompleteDefinition);
+      });
     });
 
     test('fails if asset is bound with a second stack', () => {
@@ -110,7 +111,7 @@ describe('code', () => {
         handler: 'index.handler',
       });
 
-      expect(stack).toHaveResourceLike('AWS::Lambda::Function', {
+      Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
         Code: {
           S3Bucket: {
             Ref: 'FunctionLambdaSourceBucketNameParameter9E9E108F',
@@ -156,7 +157,7 @@ describe('code', () => {
         handler: 'index.handler',
       });
 
-      expect(stack).toHaveResourceLike('AWS::Lambda::Function', {
+      Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
         Code: {
           S3Bucket: {
             Ref: 'BucketNameParam',
@@ -206,11 +207,11 @@ describe('code', () => {
       });
 
       // then
-      expect(stack).toHaveResource('AWS::Lambda::Function', {
+      Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
         Code: {
           ImageUri: stack.resolve(repo.repositoryUriForTag('latest')),
         },
-        ImageConfig: ABSENT,
+        ImageConfig: Match.absent(),
       });
     });
 
@@ -224,7 +225,7 @@ describe('code', () => {
         code: lambda.Code.fromEcrImage(repo, {
           cmd: ['cmd', 'param1'],
           entrypoint: ['entrypoint', 'param2'],
-          tag: 'mytag',
+          tagOrDigest: 'mytag',
           workingDirectory: '/some/path',
         }),
         handler: lambda.Handler.FROM_IMAGE,
@@ -232,7 +233,7 @@ describe('code', () => {
       });
 
       // then
-      expect(stack).toHaveResource('AWS::Lambda::Function', {
+      Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
         Code: {
           ImageUri: stack.resolve(repo.repositoryUriForTag('mytag')),
         },
@@ -241,6 +242,29 @@ describe('code', () => {
           EntryPoint: ['entrypoint', 'param2'],
           WorkingDirectory: '/some/path',
         },
+      });
+    });
+
+    test('digests are interpreted correctly', () => {
+      // given
+      const stack = new cdk.Stack();
+      const repo = new ecr.Repository(stack, 'Repo');
+
+      // when
+      new lambda.Function(stack, 'Fn', {
+        code: lambda.Code.fromEcrImage(repo, {
+          tagOrDigest: 'sha256:afc607424cc02c92d4d6af5184a4fef46a69548e465a320808c6ff358b6a3a8d',
+        }),
+        handler: lambda.Handler.FROM_IMAGE,
+        runtime: lambda.Runtime.FROM_IMAGE,
+      });
+
+      // then
+      Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
+        Code: {
+          ImageUri: stack.resolve(repo.repositoryUriForDigest('sha256:afc607424cc02c92d4d6af5184a4fef46a69548e465a320808c6ff358b6a3a8d')),
+        },
+        ImageConfig: Match.absent(),
       });
     });
 
@@ -257,7 +281,7 @@ describe('code', () => {
       });
 
       // then
-      expect(stack).toHaveResourceLike('AWS::ECR::Repository', {
+      Template.fromStack(stack).hasResourceProperties('AWS::ECR::Repository', {
         RepositoryPolicyText: {
           Statement: [
             {
@@ -291,7 +315,7 @@ describe('code', () => {
       });
 
       // then
-      expect(stack).toHaveResource('AWS::Lambda::Function', {
+      Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
         Code: {
           ImageUri: {
             'Fn::Join': ['', [
@@ -300,11 +324,11 @@ describe('code', () => {
               { Ref: 'AWS::Region' },
               '.',
               { Ref: 'AWS::URLSuffix' },
-              '/aws-cdk/assets:cea95822039f89359d77f8faf5d6da116d1da130ce61a5972190455528ce30d5',
+              '/aws-cdk/assets:768d7b6c1d41b85135f498fe0cca69fea410be3c3322c69cf08690aaad29a610',
             ]],
           },
         },
-        ImageConfig: ABSENT,
+        ImageConfig: Match.absent(),
       });
     });
 
@@ -324,7 +348,7 @@ describe('code', () => {
       });
 
       // then
-      expect(stack).toHaveResource('AWS::Lambda::Function', {
+      Template.fromStack(stack).hasResourceProperties('AWS::Lambda::Function', {
         ImageConfig: {
           Command: ['cmd', 'param1'],
           EntryPoint: ['entrypoint', 'param2'],
@@ -381,15 +405,15 @@ describe('code', () => {
       });
 
       // then
-      expect(stack).toHaveResource('AWS::Lambda::Function', {
+      Template.fromStack(stack).hasResource('AWS::Lambda::Function', {
         Metadata: {
-          [cxapi.ASSET_RESOURCE_METADATA_PATH_KEY]: 'asset.5a6c1c61bba06af5a86b69c75eaeb9cb1a0dd5d8089ef5b0a4591d17e19960cb',
+          [cxapi.ASSET_RESOURCE_METADATA_PATH_KEY]: 'asset.dd84d39b518e69c0e62a55312372cdd9ab3ef901c74a4861d92e951215257b3c',
           [cxapi.ASSET_RESOURCE_METADATA_DOCKERFILE_PATH_KEY]: dockerfilePath,
           [cxapi.ASSET_RESOURCE_METADATA_DOCKER_BUILD_ARGS_KEY]: dockerBuildArgs,
           [cxapi.ASSET_RESOURCE_METADATA_DOCKER_BUILD_TARGET_KEY]: dockerBuildTarget,
           [cxapi.ASSET_RESOURCE_METADATA_PROPERTY_KEY]: 'Code.ImageUri',
         },
-      }, ResourcePart.CompleteDefinition);
+      });
     });
 
     test('adds code asset metadata with default dockerfile path', () => {
@@ -405,13 +429,13 @@ describe('code', () => {
       });
 
       // then
-      expect(stack).toHaveResource('AWS::Lambda::Function', {
+      Template.fromStack(stack).hasResource('AWS::Lambda::Function', {
         Metadata: {
-          [cxapi.ASSET_RESOURCE_METADATA_PATH_KEY]: 'asset.7ea503e14740780eadd69ea2bacef1de3386f5ac53ea146ea36e28cef5da8b51',
+          [cxapi.ASSET_RESOURCE_METADATA_PATH_KEY]: 'asset.b7767e24de8d852617d9600e7a60395334454ca017d648f93b2d990aec7f50fd',
           [cxapi.ASSET_RESOURCE_METADATA_DOCKERFILE_PATH_KEY]: 'Dockerfile',
           [cxapi.ASSET_RESOURCE_METADATA_PROPERTY_KEY]: 'Code.ImageUri',
         },
-      }, ResourcePart.CompleteDefinition);
+      });
     });
 
     test('fails if asset is bound with a second stack', () => {
@@ -469,12 +493,13 @@ describe('code', () => {
       });
 
       // then
-      expect(stack).toHaveResource('AWS::Lambda::Function', {
+      Template.fromStack(stack).hasResource('AWS::Lambda::Function', {
         Metadata: {
-          [cxapi.ASSET_RESOURCE_METADATA_PATH_KEY]: 'asset.b401831f7a9d2f7f299ff312037585cd1760c0c9e148260be2fd8ea8a40066bb',
+          [cxapi.ASSET_RESOURCE_METADATA_PATH_KEY]: 'asset.fbafdbb9ae8d1bae0def415b791a93c486d18ebc63270c748abecc3ac0ab9533',
+          [cxapi.ASSET_RESOURCE_METADATA_IS_BUNDLED_KEY]: false,
           [cxapi.ASSET_RESOURCE_METADATA_PROPERTY_KEY]: 'Code',
         },
-      }, ResourcePart.CompleteDefinition);
+      });
 
       expect(fromBuildMock).toHaveBeenCalledWith(path.join(__dirname, 'docker-build-lambda'), {});
       expect(cpMock).toHaveBeenCalledWith('/asset/.', undefined);

@@ -4,18 +4,22 @@ var constructs = require('constructs');
 if (process.env.PACKAGE_LAYOUT_VERSION === '1') {
   var cdk = require('@aws-cdk/core');
   var ec2 = require('@aws-cdk/aws-ec2');
+  var s3 = require('@aws-cdk/aws-s3');
   var ssm = require('@aws-cdk/aws-ssm');
   var iam = require('@aws-cdk/aws-iam');
   var sns = require('@aws-cdk/aws-sns');
+  var sqs = require('@aws-cdk/aws-sqs');
   var lambda = require('@aws-cdk/aws-lambda');
   var docker = require('@aws-cdk/aws-ecr-assets');
 } else {
   var cdk = require('aws-cdk-lib');
   var {
     aws_ec2: ec2,
+    aws_s3: s3,
     aws_ssm: ssm,
     aws_iam: iam,
     aws_sns: sns,
+    aws_sqs: sqs,
     aws_lambda: lambda,
     aws_ecr_assets: docker
   } = require('aws-cdk-lib');
@@ -56,6 +60,27 @@ class YourStack extends cdk.Stack {
     super(parent, id, props);
     new sns.Topic(this, 'topic1');
     new sns.Topic(this, 'topic2');
+  }
+}
+
+class ImportableStack extends cdk.Stack {
+  constructor(parent, id, props) {
+    super(parent, id, props);
+
+    if (!process.env.OMIT_TOPIC) {
+      const queue = new sqs.Queue(this, 'Queue', {
+        removalPolicy: process.env.ORPHAN_TOPIC ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
+      });
+
+      new cdk.CfnOutput(this, 'QueueName', {
+        value: queue.queueName,
+      });
+      new cdk.CfnOutput(this, 'QueueLogicalId', {
+        value: queue.node.defaultChild.logicalId,
+      });
+    }
+
+    new cdk.CfnWaitConditionHandle(this, 'Handle');
   }
 }
 
@@ -109,7 +134,7 @@ class OutputsStack extends cdk.Stack {
   constructor(parent, id, props) {
     super(parent, id, props);
 
-    const topic =  new sns.Topic(this, 'MyOutput', {
+    const topic = new sns.Topic(this, 'MyOutput', {
       topicName: `${cdk.Stack.of(this).stackName}MyTopic`
     });
 
@@ -299,6 +324,17 @@ class StageUsingContext extends cdk.Stage {
   }
 }
 
+class BuiltinLambdaStack extends cdk.Stack {
+  constructor(parent, id, props) {
+    super(parent, id, props);
+
+    new s3.Bucket(this, 'Bucket', {
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true, // will deploy a Nodejs lambda backed custom resource
+    });
+  }
+}
+
 const app = new cdk.App();
 
 const defaultEnv = {
@@ -339,7 +375,7 @@ switch (stackSet) {
       if (process.env.ENABLE_VPC_TESTING === 'DEFINE')
         new DefineVpcStack(app, `${stackPrefix}-define-vpc`, { env });
       if (process.env.ENABLE_VPC_TESTING === 'IMPORT')
-      new ImportVpcStack(app, `${stackPrefix}-import-vpc`, { env });
+        new ImportVpcStack(app, `${stackPrefix}-import-vpc`, { env });
     }
 
     new ConditionalResourceStack(app, `${stackPrefix}-conditional-resource`)
@@ -352,6 +388,10 @@ switch (stackSet) {
     });
 
     new SomeStage(app, `${stackPrefix}-stage`);
+
+    new BuiltinLambdaStack(app, `${stackPrefix}-builtin-lambda-function`);
+
+    new ImportableStack(app, `${stackPrefix}-importable-stack`);
     break;
 
   case 'stage-using-context':

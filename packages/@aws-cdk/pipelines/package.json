@@ -15,7 +15,7 @@
     "watch": "cdk-watch",
     "lint": "cdk-lint",
     "test": "cdk-test",
-    "integ": "cdk-integ",
+    "integ": "integ-runner",
     "pkglint": "pkglint -f",
     "package": "cdk-package",
     "awslint": "cdk-awslint",
@@ -25,6 +25,13 @@
     "rosetta:extract": "yarn --silent jsii-rosetta extract",
     "build+extract": "yarn build && yarn rosetta:extract",
     "build+test+extract": "yarn build+test && yarn rosetta:extract"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json",
+    "./.jsii": "./.jsii",
+    "./.warnings.jsii.js": "./.warnings.jsii.js",
+    "./lib/helpers-internal": "./lib/helpers-internal/index.js"
   },
   "author": {
     "name": "Amazon Web Services",
@@ -38,10 +45,10 @@
     "@aws-cdk/aws-sns-subscriptions": "0.0.0",
     "@aws-cdk/aws-sqs": "0.0.0",
     "@aws-cdk/cdk-build-tools": "0.0.0",
-    "@aws-cdk/cdk-integ-tools": "0.0.0",
+    "@aws-cdk/integ-runner": "0.0.0",
     "@aws-cdk/cfn2ts": "0.0.0",
     "@aws-cdk/pkglint": "0.0.0",
-    "@types/jest": "^27.0.2",
+    "@types/jest": "^27.5.0",
     "aws-sdk": "^2.848.0"
   },
   "peerDependencies": {
@@ -149,5 +156,6 @@
   "homepage": "https://github.com/aws/aws-cdk",
   "publishConfig": {
     "tag": "latest"
-  }
+  },
+  "preferredCdkCliVersion": "1"
 }
